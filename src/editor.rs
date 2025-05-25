@@ -10,6 +10,7 @@ pub struct StarEditor {
     drag_start: Option<egui::Pos2>,
     view_offset: [f32; 2],
     pan_start: Option<egui::Pos2>,
+    image_cache: std::collections::HashMap<String, egui::TextureHandle>,
 }
 
 impl Default for StarEditor {
@@ -22,6 +23,7 @@ impl Default for StarEditor {
             drag_start: None,
             view_offset: [0.0, 0.0],
             pan_start: None,
+            image_cache: std::collections::HashMap::new(),
         }
     }
 }
@@ -33,10 +35,27 @@ pub struct GameObject {
     position: [f32; 2],
     rotation: f32,
     scale: [f32; 2],
+    pub image_path: Option<String>,
+}
+
+impl StarEditor {
+    pub fn load_image(path: &str, ctx: &egui::Context) -> Option<egui::TextureHandle> {
+        use image::io::Reader as ImageReader;
+        use image::GenericImageView;
+
+        let reader = ImageReader::open(path).ok()?;
+        let img = reader.decode().ok()?;
+        let size = [img.width() as usize, img.height() as usize];
+        let rgba = img.to_rgba8();
+        let pixels = rgba.as_flat_samples();
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, pixels.as_slice());
+
+        Some(ctx.load_texture(path.to_string(), color_image, Default::default()))
+    }
 }
 
 impl eframe::App for StarEditor {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+   fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::SidePanel::left("hierarchy").show(ctx, |ui| {
             ui.heading("Hierarchy");
             for (i, obj) in self.objects.iter().enumerate() {
@@ -52,6 +71,7 @@ impl eframe::App for StarEditor {
                     position: [0.0, 0.0],
                     rotation: 0.0,
                     scale: [1.0, 1.0],
+                    image_path: None,
                 });
             }
             ui.separator();
@@ -66,7 +86,17 @@ impl eframe::App for StarEditor {
         egui::SidePanel::right("inspector").show(ctx, |ui| {
             ui.heading("Inspector");
             if let Some(i) = self.selected {
+                let path = self.objects[i].image_path.clone().unwrap_or_default();
+
+                if !self.image_cache.contains_key(&path) {
+                    if let Some(tex) = StarEditor::load_image(&path, ctx) {
+                        self.image_cache.insert(path.clone(), tex);
+                    }
+                }
+
                 let obj = &mut self.objects[i];
+                obj.image_path = Some(path.clone());
+
                 ui.label(format!("ID: {}", obj.id));
                 ui.text_edit_singleline(&mut obj.name);
                 ui.horizontal(|ui| {
@@ -83,15 +113,6 @@ impl eframe::App for StarEditor {
                     ui.add(egui::DragValue::new(&mut obj.scale[0]));
                     ui.add(egui::DragValue::new(&mut obj.scale[1]));
                 });
-                ui.separator();
-                if ui.button("Delete Object").clicked() {
-                    if let Some(i) = self.selected {
-                        if i < self.objects.len() {
-                            self.objects.remove(i);
-                            self.selected = None;
-                        }
-                    }
-                }
             } else {
                 ui.label("No object selected.");
             }
@@ -191,6 +212,20 @@ impl eframe::App for StarEditor {
                     }
                 } else {
                     self.pan_start = None;
+                }
+
+                if let Some(path) = &obj.image_path {
+                    if let Some(tex) = self.image_cache.get(path) {
+                        let size = egui::vec2(size_x, size_y);
+                        let pos = egui::pos2(center.x - size_x / 2.0, center.y - size_y / 2.0);
+                        painter.image(
+                            tex.id(),
+                            egui::Rect::from_min_size(pos, size),
+                            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                        continue;
+                    }
                 }
 
                 ctx.input(|i| {
